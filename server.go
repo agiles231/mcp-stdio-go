@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"runtime/debug"
 
 	"github.com/agiles231/mcp-stdio-go/protocol"
 	"github.com/agiles231/mcp-stdio-go/transport"
@@ -121,6 +123,22 @@ func (s *Server) handleToolsList(req *protocol.Request) *protocol.Response {
 	return result(req.ID, protocol.ToolsListResult{Tools: descriptors})
 }
 
+// safeExecute runs a tool's Execute, converting any panic into an error
+// so a single misbehaving tool can never crash the server.
+func (s *Server) safeExecute(ctx context.Context, tool Tool, args json.RawMessage) (text string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("tool panicked",
+				"tool", tool.Name(),
+				"panic", r,
+				"stack", string(debug.Stack()),
+			)
+			err = fmt.Errorf("tool %q panicked: %v", tool.Name(), r)
+		}
+	}()
+	return tool.Execute(ctx, args)
+}
+
 func (s *Server) handleToolsCall(ctx context.Context, req *protocol.Request) *protocol.Response {
 	var p protocol.ToolCallParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -131,7 +149,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *protocol.Request) *pr
 		return fail(req.ID, protocol.CodeInvalidParams, "unknown tool: "+p.Name)
 	}
 
-	text, err := tool.Execute(ctx, p.Arguments)
+	text, err := s.safeExecute(ctx, tool, p.Arguments)
 	if err != nil {
 		// Tool failure is a SUCCESSFUL call reporting isError: true - not
 		// a JSON-RPC error.
