@@ -70,7 +70,7 @@ func (s *Server) Run(ctx context.Context) error {
 			continue
 		}
 
-		resp := s.dispatch(ctx, &req)
+		resp := s.Dispatch(ctx, &req)
 		if resp == nil {
 			continue // notification: protocol forbids a response
 		}
@@ -109,6 +109,42 @@ func (s *Server) handleInitialize(req *protocol.Request) *protocol.Response {
 	})
 }
 
+func (s *Server) handleToolsList(req *protocol.Request) *protocol.Response {
+	descriptors := make([]protocol.ToolDescriptor, 0, len(s.tools))
+	for _, t := range s.tools {
+		descriptors = append(descriptors, protocol.ToolDescriptor{
+			Name:        t.Name(),
+			Description: t.Description(),
+			InputSchema: t.Schema(),
+		})
+	}
+	return result(req.ID, protocol.ToolsListResult{Tools: descriptors})
+}
+
+func (s *Server) handleToolsCall(ctx context.Context, req *protocol.Request) *protocol.Response {
+	var p protocol.ToolCallParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return fail(req.ID, protocol.CodeInvalidParams, "invalid tool call params")
+	}
+	tool, ok := s.tools[p.Name]
+	if !ok {
+		return fail(req.ID, protocol.CodeInvalidParams, "unknown tool: "+p.Name)
+	}
+
+	text, err := tool.Execute(ctx, p.Arguments)
+	if err != nil {
+		// Tool failure is a SUCCESSFUL call reporting isError: true - not
+		// a JSON-RPC error.
+		return result(req.ID, protocol.ToolCallResult{
+			Content: []protocol.Content{{Type: "text", Text: err.Error()}},
+			IsError: true,
+		})
+	}
+	return result(req.ID, protocol.ToolCallResult{
+		Content: []protocol.Content{{Type: "text", Text: text}},
+	})
+}
+
 func result(id json.RawMessage, payload any) *protocol.Response {
 	return &protocol.Response{
 		JSONRPC: protocolVersion,
@@ -121,5 +157,15 @@ func fail(id json.RawMessage, code int, msg string) *protocol.Response {
 		JSONRPC: protocolVersion,
 		ID:      id,
 		Error:   &protocol.Error{Code: code, Message: msg},
+	}
+}
+
+func parseError() *protocol.Response {
+	// Spec: when the id can't be determined, it must be null (literally),
+	// not omitted. So we set the raw bytes "null" explicitly.
+	return &protocol.Response{
+		JSONRPC: protocol.VERSION,
+		ID:      json.RawMessage("null"),
+		Error:   &protocol.Error{Code: protocol.CodeParseError, Message: "parse error"},
 	}
 }
