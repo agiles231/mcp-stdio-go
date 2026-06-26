@@ -43,6 +43,10 @@ func (s *Stdio) Write(v any) error {
 	b = append(b, '\n')
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// TODO: writes are intentionally unbuffered for low request/response
+	// latency. Revisit buffered+flushed writes only if a high-throughput,
+	// non-request/response use case emerges where syscall amortization
+	// would actually matter.
 	_, err = s.w.Write(b)
 	return err
 }

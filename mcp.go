@@ -27,4 +27,5 @@ type InputSchema struct {
 type Property struct {
 	Type        string `json:"type"`
 	Description string `json:"description,omitempty"`
+	// TODO: Support full protocol
 }
