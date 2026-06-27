@@ -68,6 +68,16 @@ func NewServer(name, version string, opts ...Option) *Server {
 
 func (s *Server) Register(tools ...Tool) {
 	for _, t := range tools {
+		if t == nil {
+			panic("mcp: Register called with nil Tool")
+		}
+		name := t.Name()
+		if name == "" {
+			panic("mcp: Register called with a Tool thas has an empty Name()")
+		}
+		if _, exists := s.tools[name]; exists {
+			panic(fmt.Sprintf("mcp: duplicate tool name %q", name))
+		}
 		s.tools[t.Name()] = t
 	}
 }
