@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 
 	"github.com/agiles231/mcp-stdio-go"
@@ -47,5 +48,8 @@ func main() {
 	)
 	ctx := context.Background()
 	srv.Register(readFile{})
-	srv.Run(ctx)
+	err := srv.Run(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
