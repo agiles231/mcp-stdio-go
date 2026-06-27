@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"sync"
 
 	"github.com/agiles231/mcp-stdio-go/protocol"
 	"github.com/agiles231/mcp-stdio-go/transport"
@@ -24,10 +25,22 @@ type Server struct {
 	tp          *transport.Stdio
 	log         *slog.Logger
 	initialized bool
+
+	sem chan struct{}  // bounds in-flight tool executions
+	wg  sync.WaitGroup // tracks them for graceful shutdown
 }
+
+const defaultMaxConcurrency = 8
 
 type Option func(*Server)
 
+func WithMaxConcurrency(n int) Option {
+	return func(s *Server) {
+		if n > 0 {
+			s.sem = make(chan struct{}, n)
+		}
+	}
+}
 func WithLogger(l *slog.Logger) Option {
 	return func(s *Server) { s.log = l }
 }
@@ -47,6 +60,9 @@ func NewServer(name, version string, opts ...Option) *Server {
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.sem == nil {
+		s.sem = make(chan struct{}, defaultMaxConcurrency)
+	}
 	return s
 }
 
@@ -57,6 +73,7 @@ func (s *Server) Register(tools ...Tool) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	defer s.wg.Wait() // let in-flight tool calls finish writing before we return
 	type readResult struct {
 		raw json.RawMessage
 		err error
@@ -107,6 +124,13 @@ func (s *Server) handleRaw(ctx context.Context, raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return s.tp.Write((parseError()))
 	}
+
+	// tools/call is the only slow handler - run it concurrently. All
+	// other methods are fast and lifecycle-sensitive, so they stay on the
+	// main goroutine where shared state (initialized) is safe.
+	if req.Method == "tools/call" {
+		return s.dispatchToolCall(ctx, &req)
+	}
 	resp := s.dispatch(ctx, &req)
 	if resp == nil {
 		return nil
@@ -127,17 +151,59 @@ func (s *Server) dispatch(ctx context.Context, req *protocol.Request) *protocol.
 			return fail(req.ID, protocol.CodeServerNotInitialized, "server not initialized")
 		}
 		return s.handleToolsList(req)
-	case "tools/call":
-		if !s.initialized {
-			return fail(req.ID, protocol.CodeServerNotInitialized, "server not initialized")
-		}
-		return s.handleToolsCall(ctx, req)
 	default:
 		if req.IsNotification() {
 			return nil // unknown notifications are ignored, never errored
 		}
 		return fail(req.ID, protocol.CodeMethodNotFound, "method not found: "+req.Method)
 	}
+}
+
+func (s *Server) dispatchToolCall(ctx context.Context, req *protocol.Request) error {
+	// Validation happens on main goroutine: it reads shared state
+	// (initialized, the tools map) and is cheap. Only Execute is deferred.
+	if !s.initialized {
+		return s.tp.Write(fail(req.ID, protocol.CodeServerNotInitialized, "server not initialized"))
+	}
+	var p protocol.ToolCallParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return s.tp.Write(fail(req.ID, protocol.CodeInvalidParams, "invalid tool call params"))
+	}
+	tool, ok := s.tools[p.Name]
+	if !ok {
+		return s.tp.Write(fail(req.ID, protocol.CodeInvalidParams, "unknown tool: "+p.Name))
+	}
+
+	// Acquire a slot. If we're at capacity this blocks the read loop -
+	// deliberate backpressure that bounds memory and goroutine count.
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() { <-s.sem }()
+
+		text, err := s.safeExecute(ctx, tool, p.Arguments)
+		resp := result(req.ID, protocol.ToolCallResult{
+			Content: []protocol.Content{{Type: "text", Text: text}},
+		})
+		if err != nil {
+			resp = result(req.ID, protocol.ToolCallResult{
+				Content: []protocol.Content{{Type: "text", Text: err.Error()}},
+				IsError: true,
+			})
+		}
+		// Write is mutex-guarded in the transport - this is eactly the
+		// concurrent-writer case that mutex was built for
+		if werr := s.tp.Write(resp); werr != nil {
+			s.log.Error("writing tool response", "tool", p.Name, "err", werr)
+		}
+	}()
+	return nil
 }
 
 func (s *Server) handleInitialize(req *protocol.Request) *protocol.Response {
@@ -188,30 +254,6 @@ func (s *Server) safeExecute(ctx context.Context, tool Tool, args json.RawMessag
 		}
 	}()
 	return tool.Execute(ctx, args)
-}
-
-func (s *Server) handleToolsCall(ctx context.Context, req *protocol.Request) *protocol.Response {
-	var p protocol.ToolCallParams
-	if err := json.Unmarshal(req.Params, &p); err != nil {
-		return fail(req.ID, protocol.CodeInvalidParams, "invalid tool call params")
-	}
-	tool, ok := s.tools[p.Name]
-	if !ok {
-		return fail(req.ID, protocol.CodeInvalidParams, "unknown tool: "+p.Name)
-	}
-
-	text, err := s.safeExecute(ctx, tool, p.Arguments)
-	if err != nil {
-		// Tool failure is a SUCCESSFUL call reporting isError: true - not
-		// a JSON-RPC error.
-		return result(req.ID, protocol.ToolCallResult{
-			Content: []protocol.Content{{Type: "text", Text: err.Error()}},
-			IsError: true,
-		})
-	}
-	return result(req.ID, protocol.ToolCallResult{
-		Content: []protocol.Content{{Type: "text", Text: text}},
-	})
 }
 
 func result(id json.RawMessage, payload any) *protocol.Response {

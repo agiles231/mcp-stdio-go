@@ -5,8 +5,20 @@ import (
 	"encoding/json"
 )
 
-// Tool is the contract a tool author implements. The framework calls
-// these to advertise the tool (Name/Description/Schema) and to run it
+// Tool is the contract a tool author implements.
+//
+// Execute MAY be called concurrently. The server dispatches tool calls on
+// separate goroutines (bounded by WithMaxConcurrency), so a single Tool's
+// Execute can be running multiple times at once. Implementations are
+// responsible for their own thread-safety:
+//
+//   - Guard any shared mutable state the tool holds.
+//   - For tools that mutate external resources (e.g. files), serialize
+//     access to the SAME resource yourself — typically per-resource
+//     locking (a per-path mutex), not a single global lock.
+//
+// Name, Description, and Schema are treated as constant metadata; they may
+// be queried at any time and must not depend on mutable state.
 type Tool interface {
 	Name() string
 	Description() string

@@ -77,8 +77,9 @@ func TestServerSession(t *testing.T) {
 		t.Fatalf("got %d responses, want 3 (notification must yield none)", len(got))
 	}
 
+	resp := byID(got)
 	// initialize: id echoed, serverInfo reflects our constructor args.
-	if string(got[0].ID) != "1" {
+	if string(resp["1"].ID) != "1" {
 		t.Errorf("initialize id = %s, want 1", got[0].ID)
 	}
 
@@ -89,7 +90,7 @@ func TestServerSession(t *testing.T) {
 		} `json:"serverInfo"`
 	}
 
-	mustUnmarshal(t, got[0].Result, &initResult)
+	mustUnmarshal(t, resp["1"].Result, &initResult)
 	if initResult.ServerInfo.Name != "test-server" {
 		t.Errorf("serverInfo.name = %q, want test-server", initResult.ServerInfo.Name)
 	}
@@ -104,7 +105,7 @@ func TestServerSession(t *testing.T) {
 		} `json:"tools"`
 	}
 
-	mustUnmarshal(t, got[1].Result, &listResult)
+	mustUnmarshal(t, resp["2"].Result, &listResult)
 	if len(listResult.Tools) != 1 || listResult.Tools[0].Name != "echo" {
 		t.Errorf("tools/list returned %+v, want one tool named echo", listResult.Tools)
 	}
@@ -116,7 +117,7 @@ func TestServerSession(t *testing.T) {
 		} `json:"content"`
 		IsError bool `json:"isError"`
 	}
-	mustUnmarshal(t, got[2].Result, &callResult)
+	mustUnmarshal(t, resp["3"].Result, &callResult)
 	if callResult.IsError {
 		t.Error("tools/call reported isError, want success")
 	}
@@ -150,6 +151,14 @@ func (panicTool) Execute(context.Context, json.RawMessage) (string, error) {
 	panic("kaboom")
 }
 
+func byID(got []rpcResponse) map[string]rpcResponse {
+	m := make(map[string]rpcResponse, len(got))
+	for _, r := range got {
+		m[string(r.ID)] = r
+	}
+	return m
+}
+
 func TestServerFailurePaths(t *testing.T) {
 	requests := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo": { "name": "test","version":"0.0.1"}}}`,
@@ -176,21 +185,22 @@ func TestServerFailurePaths(t *testing.T) {
 		t.Fatalf("got %d responses, want 5", len(got))
 	}
 
+	resp := byID(got)
 	// Unknown method: a PROTOCOL error (MethodNotFound).
-	if got[1].Error == nil || got[1].Error.Code != -32601 {
+	if r := resp["10"]; r.Error == nil || got[1].Error.Code != -32601 {
 		t.Errorf("unknown method: got %+v, want error code -32601", got[1])
 	}
 	// Unknown tool: the message parse fine, so it's InvalidParams, not
 	// MethodNotFound - a deliberate distinction.
-	if got[2].Error == nil || got[2].Error.Code != -32602 {
+	if r := resp["11"]; r.Error == nil || got[2].Error.Code != -32602 {
 		t.Errorf("unknown tool: got %+v, want error code -32602", got[2])
 	}
 
 	// Tool returns an error: NOT a protocol error - a successful call
 	// reporting isError:true.
-	assertToolError(t, got[3], "boom")
+	assertToolError(t, resp["12"], "boom")
 	// Tool panics: recovered and surfaced the same way as a returned error
-	assertToolError(t, got[4], "panicked")
+	assertToolError(t, resp["13"], "panicked")
 }
 
 func decodeAll(t *testing.T, stream string) []rpcResponse {
