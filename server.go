@@ -56,31 +56,61 @@ func (s *Server) Register(tools ...Tool) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	for {
-		raw, err := s.tp.Read()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil // client close the pipe: clean shutdown
+	type readResult struct {
+		raw json.RawMessage
+		err error
+	}
+	reads := make(chan readResult)
+
+	// Reader goroutine: the only thing that ever blocks on Read. It
+	// offers each result to the loop, but abandons the send if the
+	// context is cancelled first, so it can never block forever on a
+	// receiver that has already gone away
+	go func() {
+		for {
+			raw, err := s.tp.Read()
+			select {
+			case reads <- readResult{raw, err}:
+			case <-ctx.Done():
+				return
 			}
-			return err
+			if err != nil {
+				return
+			}
 		}
-
-		var req protocol.Request
-		if err := json.Unmarshal(raw, &req); err != nil {
-			// We couldn't parse the envelope, so we don't know the id.
-			_ = s.tp.Write(parseError())
-			continue
-		}
-
-		resp := s.Dispatch(ctx, &req)
-		if resp == nil {
-			continue // notification: protocol forbids a response
-		}
-		if err := s.tp.Write(resp); err != nil {
-			s.log.Error("write response failed", "err", err)
-			return err
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			// Unblock the reader's in-flight Read so the goroutine exits.
+			_ = s.tp.Close()
+			return ctx.Err()
+		case r := <-reads:
+			if r.err != nil {
+				if errors.Is(r.err, io.EOF) {
+					return nil // clean shutdown
+				}
+			}
+			if err := s.handleRaw(ctx, r.raw); err != nil {
+				s.log.Error("handling message", "err", err)
+				return err
+			}
 		}
 	}
+}
+
+// handleRaw decodes one message, dispatches it, and writes the response
+// (if any). A nil return from dispatch means a notification - no reply
+func (s *Server) handleRaw(ctx context.Context, raw json.RawMessage) error {
+	var req protocol.Request
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return s.tp.Write((parseError()))
+	}
+	resp := s.Dispatch(ctx, &req)
+	if resp == nil {
+		return nil
+	}
+	return s.tp.Write(resp)
 }
 
 func (s *Server) Dispatch(ctx context.Context, req *protocol.Request) *protocol.Response {

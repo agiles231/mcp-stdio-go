@@ -11,6 +11,7 @@ import (
 // of JSON-RPC and MCP semantics: it moves opaque JSON in and out, and
 // nothing else in the codebase may touch the underlying stdout
 type Stdio struct {
+	r   io.Reader
 	dec *json.Decoder
 	w   io.Writer
 	mu  sync.Mutex
@@ -18,9 +19,17 @@ type Stdio struct {
 
 func New(r io.Reader, w io.Writer) *Stdio {
 	return &Stdio{
+		r:   r,
 		dec: json.NewDecoder(r),
 		w:   w,
 	}
+}
+
+func (s *Stdio) Close() error {
+	if c, ok := s.r.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // Read returns the raw bytes of the next JSON value from the input

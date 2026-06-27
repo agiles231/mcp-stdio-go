@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agiles231/mcp-stdio-go"
 )
@@ -226,5 +227,28 @@ func assertToolError(t *testing.T, resp rpcResponse, wantSubstr string) {
 	}
 	if len(res.Content) == 0 || !strings.Contains(res.Content[0].Text, wantSubstr) {
 		t.Errorf("content = %+v, want text containing %q", res.Content, wantSubstr)
+	}
+}
+
+func TestRunReturnsOnCancel(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+
+	var output strings.Builder
+	srv := mcp.NewServer("test", "0.1.0", mcp.WithIO(pr, &output))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Run did not return within 2s of cancellation")
 	}
 }
