@@ -9,29 +9,20 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: "Checkout"
-        uses: actions/checkout@v4
-
-      - name: "Setup"
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
-
       - run: go build ./...
-
       - run: go test -race ./...
   lint:
     runs-on: ubuntu-latest
     steps:
-      - name: "Checkout"
-        uses: actions/checkout@v4
-
-      - name: "Setup"
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version-file: 'go.mod'
-
-      - name: "Lint"
-        uses: golangcli/golangcli-lint-action@v6
+          go-version: stable
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12
