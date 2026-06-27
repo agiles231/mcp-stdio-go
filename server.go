@@ -41,6 +41,7 @@ func WithMaxConcurrency(n int) Option {
 		}
 	}
 }
+
 func WithLogger(l *slog.Logger) Option {
 	return func(s *Server) { s.log = l }
 }

@@ -11,11 +11,6 @@ import (
 type readFile struct {
 }
 
-//	type Property struct {
-//		Type        string `json:"type"`
-//		Description string `json:"description,omitempty"`
-//		// TODO: Support full protocol
-//	}
 func (r readFile) Name() string        { return "Read file" }
 func (r readFile) Description() string { return "Reads a file" }
 func (r readFile) Schema() mcp.InputSchema {
