@@ -18,11 +18,12 @@ import (
 const protocolVersion = "2024-11-05"
 
 type Server struct {
-	name    string
-	version string
-	tools   map[string]Tool
-	tp      *transport.Stdio
-	log     *slog.Logger
+	name        string
+	version     string
+	tools       map[string]Tool
+	tp          *transport.Stdio
+	log         *slog.Logger
+	initialized bool
 }
 
 type Option func(*Server)
@@ -106,14 +107,14 @@ func (s *Server) handleRaw(ctx context.Context, raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return s.tp.Write((parseError()))
 	}
-	resp := s.Dispatch(ctx, &req)
+	resp := s.dispatch(ctx, &req)
 	if resp == nil {
 		return nil
 	}
 	return s.tp.Write(resp)
 }
 
-func (s *Server) Dispatch(ctx context.Context, req *protocol.Request) *protocol.Response {
+func (s *Server) dispatch(ctx context.Context, req *protocol.Request) *protocol.Response {
 	switch req.Method {
 	case "initialize":
 		return s.handleInitialize(req)
@@ -122,8 +123,14 @@ func (s *Server) Dispatch(ctx context.Context, req *protocol.Request) *protocol.
 	case "ping":
 		return result(req.ID, struct{}{})
 	case "tools/list":
+		if !s.initialized {
+			return fail(req.ID, protocol.CodeServerNotInitialized, "server not initialized")
+		}
 		return s.handleToolsList(req)
 	case "tools/call":
+		if !s.initialized {
+			return fail(req.ID, protocol.CodeServerNotInitialized, "server not initialized")
+		}
 		return s.handleToolsCall(ctx, req)
 	default:
 		if req.IsNotification() {
@@ -134,6 +141,20 @@ func (s *Server) Dispatch(ctx context.Context, req *protocol.Request) *protocol.
 }
 
 func (s *Server) handleInitialize(req *protocol.Request) *protocol.Response {
+	var params protocol.InitializeParams
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return fail(req.ID, protocol.CodeInvalidParams, "invalid initialize params")
+		}
+	}
+
+	// We advertize exactly one version. If the client asked for another,
+	// we still answer with ours - the client decides whether to proceed.
+	if params.ProtocolVersion != "" && params.ProtocolVersion != protocolVersion {
+		s.log.Warn("client.requested a different protocol version",
+			"client", params.ProtocolVersion, "server", protocolVersion)
+	}
+	s.initialized = true
 	return result(req.ID, protocol.InitializeResult{
 		ProtocolVersion: protocolVersion,
 		Capabilities:    map[string]any{"tools": map[string]any{}},

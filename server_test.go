@@ -152,6 +152,7 @@ func (panicTool) Execute(context.Context, json.RawMessage) (string, error) {
 
 func TestServerFailurePaths(t *testing.T) {
 	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo": { "name": "test","version":"0.0.1"}}}`,
 		`{"jsonrpc":"2.0","id":10,"method":"bogus/method"}`,
 		`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"nope","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"fail","arguments":{}}}`,
@@ -171,25 +172,25 @@ func TestServerFailurePaths(t *testing.T) {
 	}
 
 	got := decodeAll(t, output.String())
-	if len(got) != 4 {
-		t.Fatalf("got %d responses, want 4", len(got))
+	if len(got) != 5 {
+		t.Fatalf("got %d responses, want 5", len(got))
 	}
 
 	// Unknown method: a PROTOCOL error (MethodNotFound).
-	if got[0].Error == nil || got[0].Error.Code != -32601 {
-		t.Errorf("unknown method: got %+v, want error code -32601", got[0])
+	if got[1].Error == nil || got[1].Error.Code != -32601 {
+		t.Errorf("unknown method: got %+v, want error code -32601", got[1])
 	}
 	// Unknown tool: the message parse fine, so it's InvalidParams, not
 	// MethodNotFound - a deliberate distinction.
-	if got[1].Error == nil || got[1].Error.Code != -32602 {
-		t.Errorf("unknown tool: got %+v, want error code -32602", got[1])
+	if got[2].Error == nil || got[2].Error.Code != -32602 {
+		t.Errorf("unknown tool: got %+v, want error code -32602", got[2])
 	}
 
 	// Tool returns an error: NOT a protocol error - a successful call
 	// reporting isError:true.
-	assertToolError(t, got[2], "boom")
+	assertToolError(t, got[3], "boom")
 	// Tool panics: recovered and surfaced the same way as a returned error
-	assertToolError(t, got[3], "panicked")
+	assertToolError(t, got[4], "panicked")
 }
 
 func decodeAll(t *testing.T, stream string) []rpcResponse {
@@ -232,7 +233,7 @@ func assertToolError(t *testing.T, resp rpcResponse, wantSubstr string) {
 
 func TestRunReturnsOnCancel(t *testing.T) {
 	pr, pw := io.Pipe()
-	defer pw.Close()
+	defer func() { _ = pw.Close() }()
 
 	var output strings.Builder
 	srv := mcp.NewServer("test", "0.1.0", mcp.WithIO(pr, &output))
@@ -252,3 +253,23 @@ func TestRunReturnsOnCancel(t *testing.T) {
 		t.Fatalf("Run did not return within 2s of cancellation")
 	}
 }
+
+func TestRejectsCallBeforeInitialize(t *testing.T) {
+	input := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hi"}}}` + "\n")
+	var output strings.Builder
+	srv := mcp.NewServer("test", "0.1.0", mcp.WithIO(input, &output))
+	srv.Register(echoTool{})
+	if err := srv.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	got := decodeAll(t, output.String())
+	if len(got) != 1 {
+		t.Fatalf("got %d responses, want 1", len(got))
+	}
+	if got[0].Error == nil || got[0].Error.Code != protocolNotInitialized {
+		t.Errorf("got %+v, want error code -32002", got[0])
+	}
+}
+
+const protocolNotInitialized = -32002
