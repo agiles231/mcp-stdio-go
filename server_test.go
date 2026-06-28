@@ -179,6 +179,106 @@ func TestServerSession(t *testing.T) {
 	}
 }
 
+func TestServerCapabilitiesAdvertisementTools(t *testing.T) {
+	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{
+"name":"test","version":"0.0.1"}}}`,
+	}
+	input := strings.NewReader(strings.Join(requests, "\n") + "\n")
+	var output strings.Builder
+	srv := mcp.NewServer("test-server", "0.1.0", mcp.WithIO(input, &output))
+	srv.Register(echoTool{})
+
+	// Input is fully buffered and finite, so Run consumes every request
+	// and returns cleanly at EOF - no goroutine needed.
+	if err := srv.Run(context.Background()); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	// Decode the newline-delimited responses off the captured output.
+	got := decodeAll(t, output.String())
+
+	// We sent 4 messages but one was a notification - it must produce no
+	// response. This single assertion proves notification handling works.
+	if len(got) != 1 {
+		t.Fatalf("got %d responses, want 1", len(got))
+	}
+
+	resp := byID(got)
+	// initialize: id echoed, serverInfo reflects our constructor args.
+	if string(resp["1"].ID) != "1" {
+		t.Errorf("initialize id = %s, want 1", got[0].ID)
+	}
+
+	var initResult struct {
+		ProtocolVersion string         `json:"protocolVersion"`
+		Capabilities    map[string]any `json:"capabilities,omitempty"`
+		ServerInfo      struct {
+			Name string `json:"name"`
+		} `json:"serverInfo"`
+	}
+
+	mustUnmarshal(t, resp["1"].Result, &initResult)
+	if initResult.ServerInfo.Name != "test-server" {
+		t.Errorf("serverInfo.name = %q, want test-server", initResult.ServerInfo.Name)
+	}
+	if initResult.ProtocolVersion == "" {
+		t.Errorf("initialize result missing protocolVersion")
+	}
+	if _, ok := initResult.Capabilities["tools"]; !ok {
+		t.Errorf("initialize result contains no tools capabilities when tools were registered")
+	}
+}
+
+func TestCapabilitiesAdvertiseNoTools(t *testing.T) {
+	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{
+"name":"test","version":"0.0.1"}}}`,
+	}
+	input := strings.NewReader(strings.Join(requests, "\n") + "\n")
+	var output strings.Builder
+	srv := mcp.NewServer("test-server", "0.1.0", mcp.WithIO(input, &output))
+	// NO TOOLS REGISTERED
+
+	// Input is fully buffered and finite, so Run consumes every request
+	// and returns cleanly at EOF - no goroutine needed.
+	if err := srv.Run(context.Background()); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	// Decode the newline-delimited responses off the captured output.
+	got := decodeAll(t, output.String())
+
+	// We sent 4 messages but one was a notification - it must produce no
+	// response. This single assertion proves notification handling works.
+	if len(got) != 1 {
+		t.Fatalf("got %d responses, want 1", len(got))
+	}
+
+	resp := byID(got)
+	// initialize: id echoed, serverInfo reflects our constructor args.
+	if string(resp["1"].ID) != "1" {
+		t.Errorf("initialize id = %s, want 1", got[0].ID)
+	}
+
+	var initResult struct {
+		ProtocolVersion string         `json:"protocolVersion"`
+		Capabilities    map[string]any `json:"capabilities,omitempty"`
+		ServerInfo      struct {
+			Name string `json:"name"`
+		} `json:"serverInfo"`
+	}
+
+	mustUnmarshal(t, resp["1"].Result, &initResult)
+	if initResult.ServerInfo.Name != "test-server" {
+		t.Errorf("serverInfo.name = %q, want test-server", initResult.ServerInfo.Name)
+	}
+	if initResult.ProtocolVersion == "" {
+		t.Errorf("initialize result missing protocolVersion")
+	}
+	if _, ok := initResult.Capabilities["tools"]; ok {
+		t.Errorf("initialize result contains tools capabilities when no tools were registered")
+	}
+}
+
 func mustUnmarshal(t *testing.T, data json.RawMessage, v any) {
 	t.Helper()
 	if err := json.Unmarshal(data, v); err != nil {

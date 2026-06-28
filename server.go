@@ -128,6 +128,14 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
+func (s *Server) capabilities() map[string]any {
+	caps := map[string]any{}
+	if len(s.tools) > 0 {
+		caps["tools"] = map[string]any{}
+	}
+	return caps
+}
+
 // handleRaw decodes one message, dispatches it, and writes the response
 // (if any). A nil return from dispatch means a notification - no reply
 func (s *Server) handleRaw(ctx context.Context, raw json.RawMessage) error {
@@ -235,7 +243,7 @@ func (s *Server) handleInitialize(req *protocol.Request) *protocol.Response {
 	s.initialized = true
 	return result(req.ID, protocol.InitializeResult{
 		ProtocolVersion: protocolVersion,
-		Capabilities:    map[string]any{"tools": map[string]any{}},
+		Capabilities:    s.capabilities(),
 		ServerInfo:      protocol.Implementation{Name: s.name, Version: s.version},
 	})
 }
