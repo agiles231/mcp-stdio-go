@@ -243,11 +243,16 @@ func (s *Server) handleInitialize(req *protocol.Request) *protocol.Response {
 func (s *Server) handleToolsList(req *protocol.Request) *protocol.Response {
 	descriptors := make([]protocol.ToolDescriptor, 0, len(s.tools))
 	for _, t := range s.tools {
-		descriptors = append(descriptors, protocol.ToolDescriptor{
+		d := protocol.ToolDescriptor{
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: t.Schema(),
-		})
+		}
+		if a, ok := t.(Annotated); ok {
+			ann := a.Annotations()
+			d.Annotations = &ann
+		}
+		descriptors = append(descriptors, d)
 	}
 	return result(req.ID, protocol.ToolsListResult{Tools: descriptors})
 }

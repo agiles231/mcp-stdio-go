@@ -18,12 +18,19 @@ func (r readFile) Schema() mcp.InputSchema {
 	return mcp.InputSchema{
 		Type: "object",
 		Properties: map[string]mcp.Property{
-			"path": mcp.Property{
+			"path": {
 				Type:        "string",
 				Description: "Path to the file to read",
 			},
 		},
 		Required: []string{"path"},
+	}
+}
+func (r readFile) Annotations() mcp.Annotations {
+	return mcp.Annotations{
+		Title:         "Read file",
+		ReadOnlyHint:  mcp.HintTrue(),
+		OpenWorldHint: mcp.HintFalse(), // reads the local vault, no internet access
 	}
 }
 func (r readFile) Execute(ctx context.Context, args json.RawMessage) ([]mcp.Content, error) {

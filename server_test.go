@@ -36,6 +36,37 @@ func (echoTool) Execute(_ context.Context, args json.RawMessage) ([]mcp.Content,
 	return []mcp.Content{mcp.Text(p.Message)}, nil
 }
 
+type annotatedEchoTool struct{}
+
+func (annotatedEchoTool) Name() string        { return "annotated_echo" }
+func (annotatedEchoTool) Description() string { return "echoes its message back; is annotated" }
+func (annotatedEchoTool) Schema() mcp.InputSchema {
+	return mcp.InputSchema{
+		Type: "object",
+		Properties: map[string]mcp.Property{
+			"message": {Type: "string", Description: " text to echo"},
+		},
+		Required: []string{"message"},
+	}
+}
+func (annotatedEchoTool) Annotations() mcp.Annotations {
+	return mcp.Annotations{
+		ReadOnlyHint:    mcp.HintTrue(),
+		OpenWorldHint:   mcp.HintFalse(),
+		DestructiveHint: mcp.HintFalse(),
+		IdempotentHint:  mcp.HintTrue(),
+	}
+}
+func (annotatedEchoTool) Execute(_ context.Context, args json.RawMessage) ([]mcp.Content, error) {
+	var p struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return []mcp.Content{}, err
+	}
+	return []mcp.Content{mcp.Text(p.Message)}, nil
+}
+
 // rpcResponse is a black-box view of a JSON-RPC response - defined here
 // rather than importing the internal protocol package, so the test sees
 // only what a real client would see on the wire
@@ -61,6 +92,7 @@ func TestServerSession(t *testing.T) {
 	var output strings.Builder
 	srv := mcp.NewServer("test-server", "0.1.0", mcp.WithIO(input, &output))
 	srv.Register(echoTool{})
+	srv.Register(annotatedEchoTool{})
 
 	// Input is fully buffered and finite, so Run consumes every request
 	// and returns cleanly at EOF - no goroutine needed.
@@ -99,15 +131,36 @@ func TestServerSession(t *testing.T) {
 	}
 
 	// tools/list: our one registered tool shows up with its name.
+	type ToolResult struct {
+		Name        string           `json:"name"`
+		Annotations *mcp.Annotations `json:"annotations,omitempty"`
+	}
 	var listResult struct {
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools"`
+		Tools []ToolResult `json:"tools"`
 	}
 
 	mustUnmarshal(t, resp["2"].Result, &listResult)
-	if len(listResult.Tools) != 1 || listResult.Tools[0].Name != "echo" {
-		t.Errorf("tools/list returned %+v, want one tool named echo", listResult.Tools)
+	if len(listResult.Tools) != 2 {
+		t.Errorf("tools/list returned %+v, want two tools named echo and annotated_echo", listResult.Tools)
+	}
+
+	byName := make(map[string]ToolResult)
+	for _, tool := range listResult.Tools {
+		byName[tool.Name] = tool
+	}
+	tool, ok := byName["echo"]
+	if !ok {
+		t.Error("tool 'echo' not found in tools/list")
+	}
+	if tool.Annotations != nil {
+		t.Errorf("tool 'echo' included annotations; it should omit annotations because none were provided; %v", tool)
+	}
+	tool, ok = byName["annotated_echo"]
+	if !ok {
+		t.Error("tool 'annotated_echo' not found in tools/list")
+	}
+	if tool.Annotations == nil {
+		t.Errorf("tool 'annotated_echo' did not include annotations; %v", tool)
 	}
 
 	var callResult struct {

@@ -71,6 +71,7 @@ type ToolDescriptor struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	InputSchema any    `json:"inputSchema"`
+	Annotations any    `json:"annotations,omitempty"`
 }
 
 // --- tools/call ---
