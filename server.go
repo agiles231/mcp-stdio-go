@@ -173,8 +173,6 @@ func (s *Server) handleRaw(ctx context.Context, raw json.RawMessage) error {
 		var id UnmarshaledId
 		err := json.Unmarshal(req.ID, &id)
 		if err != nil {
-			fmt.Printf("req.ID: %v\n", req.ID)
-			fmt.Printf("err: %v\n", err)
 			return s.tp.Write(fail(req.ID, protocol.CodeInvalidParams, "invalid tool call params"))
 		}
 		toolCtx, cancel := context.WithCancel(ctx)
