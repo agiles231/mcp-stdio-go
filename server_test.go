@@ -26,14 +26,14 @@ func (echoTool) Schema() mcp.InputSchema {
 		Required: []string{"message"},
 	}
 }
-func (echoTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (echoTool) Execute(_ context.Context, args json.RawMessage) ([]mcp.Content, error) {
 	var p struct {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return "", err
+		return []mcp.Content{}, err
 	}
-	return p.Message, nil
+	return []mcp.Content{mcp.Text(p.Message)}, nil
 }
 
 // rpcResponse is a black-box view of a JSON-RPC response - defined here
@@ -138,8 +138,8 @@ type failTool struct{}
 func (failTool) Name() string            { return "fail" }
 func (failTool) Description() string     { return "always returns an error" }
 func (failTool) Schema() mcp.InputSchema { return mcp.InputSchema{Type: "object"} }
-func (failTool) Execute(context.Context, json.RawMessage) (string, error) {
-	return "", errors.New("boom")
+func (failTool) Execute(context.Context, json.RawMessage) ([]mcp.Content, error) {
+	return []mcp.Content{}, errors.New("boom")
 }
 
 type panicTool struct{}
@@ -147,7 +147,7 @@ type panicTool struct{}
 func (panicTool) Name() string            { return "panic" }
 func (panicTool) Description() string     { return "always panics" }
 func (panicTool) Schema() mcp.InputSchema { return mcp.InputSchema{Type: "object"} }
-func (panicTool) Execute(context.Context, json.RawMessage) (string, error) {
+func (panicTool) Execute(context.Context, json.RawMessage) ([]mcp.Content, error) {
 	panic("kaboom")
 }
 

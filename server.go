@@ -198,16 +198,17 @@ func (s *Server) dispatchToolCall(ctx context.Context, req *protocol.Request) er
 		defer s.wg.Done()
 		defer func() { <-s.sem }()
 
-		text, err := s.safeExecute(ctx, tool, p.Arguments)
-		resp := result(req.ID, protocol.ToolCallResult{
-			Content: []protocol.Content{{Type: "text", Text: text}},
-		})
+		contents, err := s.safeExecute(ctx, tool, p.Arguments)
+		var res protocol.ToolCallResult
 		if err != nil {
-			resp = result(req.ID, protocol.ToolCallResult{
+			res = protocol.ToolCallResult{
 				Content: []protocol.Content{{Type: "text", Text: err.Error()}},
 				IsError: true,
-			})
+			}
+		} else {
+			res = protocol.ToolCallResult{Content: toWireContent(contents)}
 		}
+		resp := result(req.ID, res)
 		// Write is mutex-guarded in the transport - this is eactly the
 		// concurrent-writer case that mutex was built for
 		if werr := s.tp.Write(resp); werr != nil {
@@ -251,9 +252,22 @@ func (s *Server) handleToolsList(req *protocol.Request) *protocol.Response {
 	return result(req.ID, protocol.ToolsListResult{Tools: descriptors})
 }
 
+func toWireContent(cs []Content) []protocol.Content {
+	out := make([]protocol.Content, len(cs))
+	for i, c := range cs {
+		out[i] = protocol.Content{
+			Type:     c.Type,
+			Text:     c.Text,
+			Data:     c.Data,
+			MimeType: c.MimeType,
+		}
+	}
+	return out
+}
+
 // safeExecute runs a tool's Execute, converting any panic into an error
 // so a single misbehaving tool can never crash the server.
-func (s *Server) safeExecute(ctx context.Context, tool Tool, args json.RawMessage) (text string, err error) {
+func (s *Server) safeExecute(ctx context.Context, tool Tool, args json.RawMessage) (content []Content, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.log.Error("tool panicked",

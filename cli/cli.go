@@ -26,18 +26,18 @@ func (r readFile) Schema() mcp.InputSchema {
 		Required: []string{"path"},
 	}
 }
-func (r readFile) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+func (r readFile) Execute(ctx context.Context, args json.RawMessage) ([]mcp.Content, error) {
 	var p struct {
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return "", err
+		return []mcp.Content{}, err
 	}
 	bytes, err := os.ReadFile(p.Path)
 	if err != nil {
-		return "", err
+		return []mcp.Content{}, err
 	}
-	return string(bytes), nil
+	return []mcp.Content{mcp.Text(string(bytes))}, nil
 }
 
 func main() {

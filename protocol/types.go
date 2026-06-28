@@ -1,6 +1,8 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 const VERSION = "2.0"
 
@@ -84,6 +86,8 @@ type ToolCallResult struct {
 }
 
 type Content struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }

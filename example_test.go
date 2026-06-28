@@ -22,14 +22,15 @@ func (greetTool) Schema() mcp.InputSchema {
 		Required: []string{"name"},
 	}
 }
-func (greetTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (greetTool) Execute(_ context.Context, args json.RawMessage) ([]mcp.Content, error) {
 	var p struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return "", err
+		return nil, err
 	}
-	return fmt.Sprintf("Hello, %s", p.Name), nil
+	return []mcp.Content{
+		mcp.Text(fmt.Sprintf("Hello, %s", p.Name))}, nil
 }
 
 func ExampleServer() {

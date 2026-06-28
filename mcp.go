@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 )
 
@@ -19,11 +20,34 @@ import (
 //
 // Name, Description, and Schema are treated as constant metadata; they may
 // be queried at any time and must not depend on mutable state.
+type Content struct {
+	Type     string `json:"type"`               // "text", "image", "audio"
+	Text     string `json:"text,omitempty"`     // for "text"
+	Data     string `json:"data,omitempty"`     // base64 for "image" / "audio"
+	MimeType string `json:"mimeType,omitempty"` // for "image" / "audio"
+}
+
+func Text(s string) Content { return Content{Type: "text", Text: s} }
+func Image(data []byte, mimeType string) Content {
+	return Content{
+		Type:     "image",
+		Data:     base64.StdEncoding.EncodeToString(data),
+		MimeType: mimeType,
+	}
+}
+func Audio(data []byte, mimeType string) Content {
+	return Content{
+		Type:     "audio",
+		Data:     base64.StdEncoding.EncodeToString(data),
+		MimeType: mimeType,
+	}
+}
+
 type Tool interface {
 	Name() string
 	Description() string
 	Schema() InputSchema
-	Execute(ctx context.Context, args json.RawMessage) (string, error)
+	Execute(ctx context.Context, args json.RawMessage) ([]Content, error)
 }
 
 // InputSchema is a JSON Schema description of a tool's arguments. It
