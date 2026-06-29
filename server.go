@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/agiles231/mcp-stdio-go/protocol"
@@ -19,12 +20,13 @@ import (
 const protocolVersion = "2024-11-05"
 
 type Server struct {
-	name        string
-	version     string
-	tools       map[string]Tool
-	tp          *transport.Stdio
-	log         *slog.Logger
-	initialized bool
+	name         string
+	version      string
+	tools        map[string]Tool
+	toolContexts map[string]context.CancelFunc
+	tp           *transport.Stdio
+	log          *slog.Logger
+	initialized  bool
 
 	sem chan struct{}  // bounds in-flight tool executions
 	wg  sync.WaitGroup // tracks them for graceful shutdown
@@ -52,11 +54,12 @@ func WithIO(r io.Reader, w io.Writer) Option {
 
 func NewServer(name, version string, opts ...Option) *Server {
 	s := &Server{
-		name:    name,
-		version: version,
-		tools:   make(map[string]Tool),
-		tp:      transport.New(os.Stdin, os.Stdout),
-		log:     slog.Default(),
+		name:         name,
+		version:      version,
+		tools:        make(map[string]Tool),
+		toolContexts: make(map[string]context.CancelFunc),
+		tp:           transport.New(os.Stdin, os.Stdout),
+		log:          slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -136,6 +139,25 @@ func (s *Server) capabilities() map[string]any {
 	return caps
 }
 
+type UnmarshaledId string
+
+func (id *UnmarshaledId) UnmarshalJSON(b []byte) error {
+	// Trim quotes if the incoming value is already a JSON string
+	str := string(b)
+	if strings.HasPrefix(str, `"`) && strings.HasSuffix(str, `"`) {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*id = UnmarshaledId(s)
+		return nil
+	}
+
+	// Keep the raw JSON text representation for numbers, bools, objects, and arrays
+	*id = UnmarshaledId(str)
+	return nil
+}
+
 // handleRaw decodes one message, dispatches it, and writes the response
 // (if any). A nil return from dispatch means a notification - no reply
 func (s *Server) handleRaw(ctx context.Context, raw json.RawMessage) error {
@@ -148,7 +170,14 @@ func (s *Server) handleRaw(ctx context.Context, raw json.RawMessage) error {
 	// other methods are fast and lifecycle-sensitive, so they stay on the
 	// main goroutine where shared state (initialized) is safe.
 	if req.Method == "tools/call" {
-		return s.dispatchToolCall(ctx, &req)
+		var id UnmarshaledId
+		err := json.Unmarshal(req.ID, &id)
+		if err != nil {
+			return s.tp.Write(fail(req.ID, protocol.CodeInvalidParams, "invalid tool call params"))
+		}
+		toolCtx, cancel := context.WithCancel(ctx)
+		s.registerRequestContext(string(id), cancel)
+		return s.dispatchToolCall(toolCtx, &req)
 	}
 	resp := s.dispatch(ctx, &req)
 	if resp == nil {
@@ -163,6 +192,9 @@ func (s *Server) dispatch(ctx context.Context, req *protocol.Request) *protocol.
 		return s.handleInitialize(req)
 	case "notifications/initialized":
 		return nil // notification: acknowledge by doing nothing
+	case "notifications/cancelled":
+		s.handleToolCancel(req)
+		return nil
 	case "ping":
 		return result(req.ID, struct{}{})
 	case "tools/list":
@@ -178,6 +210,37 @@ func (s *Server) dispatch(ctx context.Context, req *protocol.Request) *protocol.
 	}
 }
 
+func (s *Server) handleToolCancel(req *protocol.Request) {
+	var params struct {
+		RequestId UnmarshaledId `json:"requestId"`
+	}
+	err := json.Unmarshal(req.Params, &params)
+	if err != nil {
+		s.log.Warn("Cancel was requested but unmarshaling parms failed", "err", err.Error())
+	}
+	_, err = s.cancelToolCall(string(params.RequestId))
+	if err != nil {
+		s.log.Warn("Cancel was requested cancel failed", "err", err.Error())
+	}
+}
+
+func (s *Server) registerRequestContext(id string, cancel context.CancelFunc) {
+	if _, ok := s.toolContexts[id]; ok {
+		// TODO return error
+		return
+	}
+	s.toolContexts[id] = cancel
+}
+
+func (s *Server) cancelToolCall(id string) (bool, error) {
+	cancel, ok := s.toolContexts[id]
+	if !ok {
+		// TODO handle failure
+		return false, nil
+	}
+	cancel()
+	return true, nil
+}
 func (s *Server) dispatchToolCall(ctx context.Context, req *protocol.Request) error {
 	// Validation happens on main goroutine: it reads shared state
 	// (initialized, the tools map) and is cheap. Only Execute is deferred.
